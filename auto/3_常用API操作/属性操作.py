@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 '''
-@File  : hah.py
+@File  : 属性操作.py
 @Author: 汪先锦
-@Date  : 2020/4/27 13:49
-@Desc  :
+@Date  : 2020/4/28 11:11
+@Desc  : 
 '''
 from selenium import webdriver
 

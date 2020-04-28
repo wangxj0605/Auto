@@ -20,7 +20,7 @@ d.get(url=url)
 #d.find_element_by_id('userName').send_keys(Keys.BACK_SPACE)
 
 
-d.find_element_by_id('password').send_keys('549382777')
+#d.find_element_by_id('password').send_keys()
 
 lf=d.find_element_by_id('nc_1_n1z')
 
