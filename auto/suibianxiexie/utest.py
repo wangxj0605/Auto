@@ -30,7 +30,7 @@ tests=loader.loadTestsFromTestCase(UserTestCase)
 #将测试用例加载到测试组
 suite.addTests(tests)
 #创建测试运行器
-with open("./test_report,txt","w")as f:
+with open("test_report,txt", "w")as f:
     runner=unittest.TextTestRunner(verbosity=2,stream=f)
     runner.run(suite)
 
