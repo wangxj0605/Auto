@@ -14,7 +14,4 @@ temp=driver.find_element_by_xpath('//*[@id="bottom_layer"]/div[1]/p[2]/a')
 print(temp.is_displayed()) #判断元素是否存在
 print(temp.is_enabled())#是否可操作
 print(temp.is_selected())#是否被选中
-driver.find_element_by_xpath('//*[@id="u1"]/a[8]').click()
-driver.switch_to.frame('//*[@id="TANGRAM__PSP_5__"]/iframe')
-driver.find_element_by_class_name("tang-pass-footerBarULogin pass-link").click()
 driver.quit()
