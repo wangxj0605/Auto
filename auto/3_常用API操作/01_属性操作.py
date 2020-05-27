@@ -6,6 +6,7 @@
 @Desc  : 
 '''
 from selenium import webdriver
+from time import sleep
 
 
 def testBaidu():
@@ -13,8 +14,8 @@ def testBaidu():
     driver = webdriver.Chrome()  # 设置谷歌浏览器s
     driver.get("http://www.baidu.com")  # 请求地址
     driver.implicitly_wait(20)
-    #driver.maximize_window()  # 浏览器最大化
-    driver.set_window_size(400,800)
+    # driver.maximize_window()  # 浏览器最大化
+    driver.set_window_size(400, 800)
     driver.find_element_by_id("kw").send_keys("软件自动化测试")
     driver.find_element_by_id("su").click()
     driver.implicitly_wait(10)
@@ -23,5 +24,21 @@ def testBaidu():
     driver.quit()
 
 
+def test_login():
+    driver = webdriver.Chrome()
+    driver.get('http://test.account.baozun.cn/person/login?appkey=IPWF-TEST')
+    sleep(2)
+    driver.find_element_by_id("loginid").send_keys('wangxianjin')
+    sleep(2)
+    driver.find_element_by_id("userpassword").send_keys('wang@123')
+    sleep(2)
+    driver.find_element_by_id("login").click()
+    sleep(2)
+
+    print(driver.title)
+
+    driver.quit()
+
+
 if __name__ == '__main__':
-    testBaidu()
+    test_login()

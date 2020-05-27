@@ -12,6 +12,9 @@ class MyTestCase(unittest.TestCase):
     def test_something(self):
         r=requests.get(url)
         print(r.text)
+        #print(r.json)
+        print(r.url)
+        print(r.status_code)
         print(r.headers)
 
 if __name__ == '__main__':

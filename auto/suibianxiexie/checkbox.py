@@ -18,3 +18,4 @@ for  i  in inputs:
         i.click()
         time.sleep(1)
 driver.quit()
+
