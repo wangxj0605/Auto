@@ -8,7 +8,7 @@
 import requests
 import re
 import json
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
+#from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
 def jenkins():
 
@@ -48,7 +48,7 @@ jenkins()
 def https():
 
 
-    requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+   # requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
     url = "https://passport.cnblogs.com/user/signin"
 
