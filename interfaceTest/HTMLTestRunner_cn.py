@@ -1,11 +1,396 @@
-<?xml version="1.0" encoding="UTF-8"?>
+# -*- coding: utf-8 -*-
+"""
+A TestRunner for use with the Python unit testing framework. It
+generates a HTML report to show the result at a glance.
+
+The simplest way to use this is to invoke its main method. E.g.
+
+    import unittest
+    import HTMLTestRunner
+
+    ... define your tests ...
+
+    if __name__ == '__main__':
+        HTMLTestRunner.main()
+
+
+For more customization options, instantiates a HTMLTestRunner object.
+HTMLTestRunner is a counterpart to unittest's TextTestRunner. E.g.
+
+    # output to a file
+    fp = file('my_report.html', 'wb')
+    runner = HTMLTestRunner.HTMLTestRunner(
+                stream=fp,
+                title='My unit test',
+                description='This demonstrates the report output by HTMLTestRunner.'
+                )
+
+    # Use an external stylesheet.
+    # See the Template_mixin class for more customizable options
+    runner.STYLESHEET_TMPL = '<link rel="stylesheet" href="my_stylesheet.css" type="text/css">'
+
+    # run the test
+    runner.run(my_test_suite)
+
+
+------------------------------------------------------------------------
+Copyright (c) 2004-2007, Wai Yip Tung
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+* Redistributions of source code must retain the above copyright notice,
+  this list of conditions and the following disclaimer.
+* Redistributions in binary form must reproduce the above copyright
+  notice, this list of conditions and the following disclaimer in the
+  documentation and/or other materials provided with the distribution.
+* Neither the name Wai Yip Tung nor the names of its contributors may be
+  used to endorse or promote products derived from this software without
+  specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+"""
+
+# URL: http://tungwaiyip.info/software/HTMLTestRunner.html
+
+__author__ = "Wai Yip Tung"
+__version__ = "0.8.3"
+
+"""
+Change History
+Version 0.8.4 by GoverSky
+* Add sopport for 3.x
+* Add piechart for resultpiechart
+* Add Screenshot for selenium_case test
+* Add Retry on failed
+
+Version 0.8.3
+* Prevent crash on class or module-level exceptions (Darren Wurf).
+
+Version 0.8.2
+* Show output inline instead of popup window (Viorel Lupu).
+
+Version in 0.8.1
+* Validated XHTML (Wolfgang Borgert).
+* Added description of test classes and test cases.
+
+Version in 0.8.0
+* Define Template_mixin class for customization.
+* Workaround a IE 6 bug that it does not treat <script> block as CDATA.
+
+Version in 0.7.1
+* Back port to Python 2.3 (Frank Horowitz).
+* Fix missing scroll bars in detail log (Podi).
+"""
+
+# TODO: color stderr
+# TODO: simplify javascript using ,ore than 1 class in the class attribute?
+import datetime
+
+import sys
+import unittest
+from xml.sax import saxutils
+
+PY3K = (sys.version_info[0] > 2)
+if PY3K:
+    import io as StringIO
+else:
+    import StringIO
+import copy
+
+
+# ------------------------------------------------------------------------
+# The redirectors below are used to capture output during testing. Output
+# sent to sys.stdout and sys.stderr are automatically captured. However
+# in some cases sys.stdout is already cached before HTMLTestRunner is
+# invoked (e.g. calling logging_demo.basicConfig). In order to capture those
+# output, use the redirectors for the cached stream.
+#
+# e.g.
+#   >>> logging_demo.basicConfig(stream=HTMLTestRunner.stdout_redirector)
+#   >>>
+
+class OutputRedirector(object):
+    """ Wrapper to redirect stdout or stderr """
+
+    def __init__(self, fp):
+        self.fp = fp
+
+    def write(self, s):
+        self.fp.write(s)
+
+    def writelines(self, lines):
+        self.fp.writelines(lines)
+
+    def flush(self):
+        self.fp.flush()
+
+
+stdout_redirector = OutputRedirector(sys.stdout)
+stderr_redirector = OutputRedirector(sys.stderr)
+
+
+# ----------------------------------------------------------------------
+# Template
+
+class Template_mixin(object):
+    """
+    Define a HTML template for report customerization and generation.
+
+    Overall structure of an HTML report
+
+    HTML
+    +------------------------+
+    |<html>                  |
+    |  <head>                |
+    |                        |
+    |   STYLESHEET           |
+    |   +----------------+   |
+    |   |                |   |
+    |   +----------------+   |
+    |                        |
+    |  </head>               |
+    |                        |
+    |  <body>                |
+    |                        |
+    |   HEADING              |
+    |   +----------------+   |
+    |   |                |   |
+    |   +----------------+   |
+    |                        |
+    |   REPORT               |
+    |   +----------------+   |
+    |   |                |   |
+    |   +----------------+   |
+    |                        |
+    |   ENDING               |
+    |   +----------------+   |
+    |   |                |   |
+    |   +----------------+   |
+    |                        |
+    |  </body>               |
+    |</html>                 |
+    +------------------------+
+    """
+
+    STATUS = {
+        0: u'通过',
+        1: u'失败',
+        2: u'错误',
+    }
+
+    DEFAULT_TITLE = 'Unit Test Report'
+    DEFAULT_DESCRIPTION = ''
+
+    # ------------------------------------------------------------------------
+    # HTML Template
+
+    HTML_TMPL = r"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
-    <title>自动化测试报告</title>
-    <meta name="generator" content="HTMLTestRunner 0.8.3"/>
+    <title>%(title)s</title>
+    <meta name="generator" content="%(generator)s"/>
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+    %(stylesheet)s
+</head>
+<body>
+<script language="javascript" type="text/javascript">
+output_list = Array();
+
+/* level - 0:Summary; 1:Failed; 2:All */
+function showCase(level) {
+    trs = document.getElementsByTagName("tr");
+    for (var i = 0; i < trs.length; i++) {
+        tr = trs[i];
+        id = tr.id;
+        if (id.substr(0,2) == 'ft') {
+            if (level < 1) {
+                tr.className = 'hiddenRow';
+            }
+            else {
+                tr.className = '';
+            }
+        }
+        if (id.substr(0,2) == 'pt') {
+            if (level > 1) {
+                tr.className = '';
+            }
+            else {
+                tr.className = 'hiddenRow';
+            }
+        }
+    }
+}
+
+
+function showClassDetail(cid, count) {
+    var id_list = Array(count);
+    var toHide = 1;
+    for (var i = 0; i < count; i++) {
+        tid0 = 't' + cid.substr(1) + '.' + (i+1);
+        tid = 'f' + tid0;
+        tr = document.getElementById(tid);
+        if (!tr) {
+            tid = 'p' + tid0;
+            tr = document.getElementById(tid);
+        }
+        id_list[i] = tid;
+        if (tr.className) {
+            toHide = 0;
+        }
+    }
+    for (var i = 0; i < count; i++) {
+        tid = id_list[i];
+        if (toHide) {
+            document.getElementById(tid).className = 'hiddenRow';
+        }
+        else {
+            document.getElementById(tid).className = '';
+        }
+    }
+}
+
+
+function showTestDetail(div_id){
+    var details_div = document.getElementById(div_id)
+    var displayState = details_div.style.display
+    // alert(displayState)
+    if (displayState != 'block' ) {
+        displayState = 'block'
+        details_div.style.display = 'block'
+    }
+    else {
+        details_div.style.display = 'none'
+    }
+}
+
+
+function html_escape(s) {
+    s = s.replace(/&/g,'&amp;');
+    s = s.replace(/</g,'&lt;');
+    s = s.replace(/>/g,'&gt;');
+    return s;
+}
+
+function drawCircle(pass, fail, error){ 
+    var color = ["#6c6","#c60","#c00"];  
+    var data = [pass,fail,error]; 
+    var text_arr = ["pass", "fail", "error"];
+
+    var canvas = document.getElementById("circle");  
+    var ctx = canvas.getContext("2d");  
+    var startPoint=0;
+    var width = 20, height = 10;
+    var posX = 112 * 2 + 20, posY = 30;
+    var textX = posX + width + 5, textY = posY + 10;
+    for(var i=0;i<data.length;i++){  
+        ctx.fillStyle = color[i];  
+        ctx.beginPath();  
+        ctx.moveTo(112,84);   
+        ctx.arc(112,84,84,startPoint,startPoint+Math.PI*2*(data[i]/(data[0]+data[1]+data[2])),false);  
+        ctx.fill();  
+        startPoint += Math.PI*2*(data[i]/(data[0]+data[1]+data[2]));  
+        ctx.fillStyle = color[i];  
+        ctx.fillRect(posX, posY + 20 * i, width, height);  
+        ctx.moveTo(posX, posY + 20 * i);  
+        ctx.font = 'bold 14px';
+        ctx.fillStyle = color[i];
+        var percent = text_arr[i] + ":"+data[i];  
+        ctx.fillText(percent, textX, textY + 20 * i);  
+
+    }
+}
+
+
+function show_img(obj) {
+    var obj1 = obj.nextElementSibling
+    obj1.style.display='block'
+    var index = 0;//每张图片的下标，
+    var len = obj1.getElementsByTagName('img').length;
+    var imgyuan = obj1.getElementsByClassName('imgyuan')[0]
+    //var start=setInterval(autoPlay,500);
+    obj1.onmouseover=function(){//当鼠标光标停在图片上，则停止轮播
+        clearInterval(start);
+    }
+    obj1.onmouseout=function(){//当鼠标光标停在图片上，则开始轮播
+        start=setInterval(autoPlay,1000);
+    }    
+    for (var i = 0; i < len; i++) {
+        var font = document.createElement('font')
+        imgyuan.appendChild(font)
+    }
+    var lis = obj1.getElementsByTagName('font');//得到所有圆圈
+    changeImg(0)
+    var funny = function (i) {
+        lis[i].onmouseover = function () {
+            index=i
+            changeImg(i)
+        }
+    }
+    for (var i = 0; i < lis.length; i++) {
+        funny(i);
+    }
     
+    function autoPlay(){
+        if(index>len-1){
+            index=0;
+            clearInterval(start); //运行一轮后停止
+        }
+        changeImg(index++);
+    }
+    imgyuan.style.width= 25*len +"px";
+    //对应圆圈和图片同步
+    function changeImg(index) {
+        var list = obj1.getElementsByTagName('img');
+        var list1 = obj1.getElementsByTagName('font');
+        for (i = 0; i < list.length; i++) {
+            list[i].style.display = 'none';
+            list1[i].style.backgroundColor = 'white';
+        }
+        list[index].style.display = 'block';
+        list1[index].style.backgroundColor = 'blue';
+    }
+
+}
+function hide_img(obj){
+    obj.parentElement.style.display = "none";
+    obj.parentElement.getElementsByClassName('imgyuan')[0].innerHTML = "";
+}
+</script>
+<div class="piechart">
+    <div>
+        <canvas id="circle" width="350" height="168" </canvas>
+    </div>
+</div>
+%(heading)s
+%(report)s
+%(ending)s
+
+</body>
+</html>
+"""
+    # variables: (title, generator, stylesheet, heading, report, ending)
+
+    # ------------------------------------------------------------------------
+    # Stylesheet
+    #
+    # alternatively use a <link> for external style sheet, e.g.
+    #   <link rel="stylesheet" href="$url" type="text/css">
+
+    STYLESHEET_TMPL = """
 <style type="text/css" media="screen">
 body        { font-family: verdana, arial, helvetica, sans-serif; font-size: 80%; }
 table       { font-size: 100%; }
@@ -189,189 +574,28 @@ tr[id^=et]  td { background-color: rgba(249,62,62,.3) !important ; }
 
 
 </style>
+"""
 
-</head>
-<body>
-<script language="javascript" type="text/javascript">
-output_list = Array();
+    # ------------------------------------------------------------------------
+    # Heading
+    #
 
-/* level - 0:Summary; 1:Failed; 2:All */
-function showCase(level) {
-    trs = document.getElementsByTagName("tr");
-    for (var i = 0; i < trs.length; i++) {
-        tr = trs[i];
-        id = tr.id;
-        if (id.substr(0,2) == 'ft') {
-            if (level < 1) {
-                tr.className = 'hiddenRow';
-            }
-            else {
-                tr.className = '';
-            }
-        }
-        if (id.substr(0,2) == 'pt') {
-            if (level > 1) {
-                tr.className = '';
-            }
-            else {
-                tr.className = 'hiddenRow';
-            }
-        }
-    }
-}
-
-
-function showClassDetail(cid, count) {
-    var id_list = Array(count);
-    var toHide = 1;
-    for (var i = 0; i < count; i++) {
-        tid0 = 't' + cid.substr(1) + '.' + (i+1);
-        tid = 'f' + tid0;
-        tr = document.getElementById(tid);
-        if (!tr) {
-            tid = 'p' + tid0;
-            tr = document.getElementById(tid);
-        }
-        id_list[i] = tid;
-        if (tr.className) {
-            toHide = 0;
-        }
-    }
-    for (var i = 0; i < count; i++) {
-        tid = id_list[i];
-        if (toHide) {
-            document.getElementById(tid).className = 'hiddenRow';
-        }
-        else {
-            document.getElementById(tid).className = '';
-        }
-    }
-}
-
-
-function showTestDetail(div_id){
-    var details_div = document.getElementById(div_id)
-    var displayState = details_div.style.display
-    // alert(displayState)
-    if (displayState != 'block' ) {
-        displayState = 'block'
-        details_div.style.display = 'block'
-    }
-    else {
-        details_div.style.display = 'none'
-    }
-}
-
-
-function html_escape(s) {
-    s = s.replace(/&/g,'&amp;');
-    s = s.replace(/</g,'&lt;');
-    s = s.replace(/>/g,'&gt;');
-    return s;
-}
-
-function drawCircle(pass, fail, error){ 
-    var color = ["#6c6","#c60","#c00"];  
-    var data = [pass,fail,error]; 
-    var text_arr = ["pass", "fail", "error"];
-
-    var canvas = document.getElementById("circle");  
-    var ctx = canvas.getContext("2d");  
-    var startPoint=0;
-    var width = 20, height = 10;
-    var posX = 112 * 2 + 20, posY = 30;
-    var textX = posX + width + 5, textY = posY + 10;
-    for(var i=0;i<data.length;i++){  
-        ctx.fillStyle = color[i];  
-        ctx.beginPath();  
-        ctx.moveTo(112,84);   
-        ctx.arc(112,84,84,startPoint,startPoint+Math.PI*2*(data[i]/(data[0]+data[1]+data[2])),false);  
-        ctx.fill();  
-        startPoint += Math.PI*2*(data[i]/(data[0]+data[1]+data[2]));  
-        ctx.fillStyle = color[i];  
-        ctx.fillRect(posX, posY + 20 * i, width, height);  
-        ctx.moveTo(posX, posY + 20 * i);  
-        ctx.font = 'bold 14px';
-        ctx.fillStyle = color[i];
-        var percent = text_arr[i] + ":"+data[i];  
-        ctx.fillText(percent, textX, textY + 20 * i);  
-
-    }
-}
-
-
-function show_img(obj) {
-    var obj1 = obj.nextElementSibling
-    obj1.style.display='block'
-    var index = 0;//每张图片的下标，
-    var len = obj1.getElementsByTagName('img').length;
-    var imgyuan = obj1.getElementsByClassName('imgyuan')[0]
-    //var start=setInterval(autoPlay,500);
-    obj1.onmouseover=function(){//当鼠标光标停在图片上，则停止轮播
-        clearInterval(start);
-    }
-    obj1.onmouseout=function(){//当鼠标光标停在图片上，则开始轮播
-        start=setInterval(autoPlay,1000);
-    }    
-    for (var i = 0; i < len; i++) {
-        var font = document.createElement('font')
-        imgyuan.appendChild(font)
-    }
-    var lis = obj1.getElementsByTagName('font');//得到所有圆圈
-    changeImg(0)
-    var funny = function (i) {
-        lis[i].onmouseover = function () {
-            index=i
-            changeImg(i)
-        }
-    }
-    for (var i = 0; i < lis.length; i++) {
-        funny(i);
-    }
-    
-    function autoPlay(){
-        if(index>len-1){
-            index=0;
-            clearInterval(start); //运行一轮后停止
-        }
-        changeImg(index++);
-    }
-    imgyuan.style.width= 25*len +"px";
-    //对应圆圈和图片同步
-    function changeImg(index) {
-        var list = obj1.getElementsByTagName('img');
-        var list1 = obj1.getElementsByTagName('font');
-        for (i = 0; i < list.length; i++) {
-            list[i].style.display = 'none';
-            list1[i].style.backgroundColor = 'white';
-        }
-        list[index].style.display = 'block';
-        list1[index].style.backgroundColor = 'blue';
-    }
-
-}
-function hide_img(obj){
-    obj.parentElement.style.display = "none";
-    obj.parentElement.getElementsByClassName('imgyuan')[0].innerHTML = "";
-}
-</script>
-<div class="piechart">
-    <div>
-        <canvas id="circle" width="350" height="168" </canvas>
-    </div>
-</div>
-<div class='heading'>
-<h1>自动化测试报告</h1>
-<p class='attribute'><strong>开始时间:</strong> 2020-05-28 13:44:34</p>
-<p class='attribute'><strong>耗时:</strong> 0:00:01.356625</p>
-<p class='attribute'><strong>状态:</strong> <span class="tj passCase">Pass</span>3</p>
-<p class='attribute'><strong>测试报告人:</strong> 汪先锦</p>
-
-<p class='description'>自动化测试报告详情</p>
+    HEADING_TMPL = """<div class='heading'>
+<h1>%(title)s</h1>
+%(parameters)s
+<p class='description'>%(description)s</p>
 </div>
 
+"""  # variables: (title, parameters, description)
 
+    HEADING_ATTRIBUTE_TMPL = """<p class='attribute'><strong>%(name)s:</strong> %(value)s</p>
+"""  # variables: (name, value)
 
+    # ------------------------------------------------------------------------
+    # Report
+    #
+
+    REPORT_TMPL = """
 <p id='show_detail_line'>显示
 <a href='javascript:showCase(0)'>概要</a>
 <a href='javascript:showCase(1)'>失败</a>
@@ -397,118 +621,502 @@ function hide_img(obj){
     <th>视图</th>
     <th>错误截图</th>
 </tr>
-
-<tr class='passClass'>
-    <td>interfaceTest.my_unittest.MyTestCase</td>
-    <td>3</td>
-    <td>3</td>
-    <td>0</td>
-    <td>0</td>
-    <td><a href="javascript:showClassDetail('c1',3)">详情</a></td>
-    <td>&nbsp;</td>
-</tr>
-
-<tr id='pt1.1' class='hiddenRow'>
-    <td ><div class='testcase'>test_train</div></td>
-    <td colspan='5' align='center'>
-
-    <!--css div popup start-->
-    <span class='status passCase'>
-    <a class="popup_link" onfocus='this.blur();' href="javascript:showTestDetail('div_pt1.1')" >
-        通过</a></span>
-
-    <div id='div_pt1.1' class="popup_window">
-        <div style='text-align: right; color:red;cursor:pointer'>
-        <a onfocus='this.blur();' onclick="document.getElementById('div_pt1.1').style.display = 'none' " >
-           [x]</a>
-        </div>
-        <pre>
-        
-pt1.1: C:\Users\WSH10112\AppData\Local\Programs\Python\Python38-32\lib\site-packages\urllib3\connectionpool.py:979: InsecureRequestWarning: Unverified HTTPS request is being made to host 'api.binstd.com'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#ssl-warnings
-  warnings.warn(
-{"status":0,"msg":"ok","result":{"start":"上海","end":"北京","date":"2020-05-28","list":[{"trainno":"G146","type":"G","typename":"高铁","station":"上海虹桥","endstation":"北京南","departuretime":"14:50","arrivaltime":"20:48","costtime":"5小时58分","trainno12306":"","distance":1318,"day":1,"isend":1,"sequenceno":1,"priceed":553,"priceyd":933,"pricesw":1748,"pricetd":"-","pricerz":"-","priceyz":"-","pricegr1":"-","pricegr2":"-","pricerw1":"-","pricerw2":"-","priceyw1":"-","priceyw2":"-","priceyw3":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"},{"trainno":"G14","type":"G","typename":"高铁","station":"上海虹桥","endstation":"北京南","departuretime":"15:00","arrivaltime":"19:36","costtime":"4小时36分","trainno12306":"","distance":1318,"day":1,"isend":1,"sequenceno":1,"priceed":553,"priceyd":933,"pricesw":1748,"pricetd":"-","pricerz":"-","priceyz":"-","pricegr1":"-","pricegr2":"-","pricerw1":"-","pricerw2":"-","priceyw1":"-","priceyw2":"-","priceyw3":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"},{"trainno":"G148","type":"G","typename":"高铁","station":"上海虹桥","endstation":"北京南","departuretime":"15:22","arrivaltime":"21:13","costtime":"5小时51分","trainno12306":"","distance":1318,"day":1,"isend":1,"sequenceno":1,"priceed":553,"priceyd":933,"pricesw":1748,"pricetd":"-","pricerz":"-","priceyz":"-","pricegr1":"-","pricegr2":"-","pricerw1":"-","pricerw2":"-","priceyw1":"-","priceyw2":"-","priceyw3":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"},{"trainno":"G170","type":"G","typename":"高铁","station":"上海虹桥","endstation":"北京南","departuretime":"15:52","arrivaltime":"21:18","costtime":"5小时26分","trainno12306":"","distance":1318,"day":1,"isend":1,"sequenceno":1,"priceed":553,"priceyd":933,"pricesw":1748,"pricetd":"-","pricerz":"-","priceyz":"-","pricegr1":"-","pricegr2":"-","pricerw1":"-","pricerw2":"-","priceyw1":"-","priceyw2":"-","priceyw3":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"},{"trainno":"G150","type":"G","typename":"高铁","station":"上海虹桥","endstation":"北京南","departuretime":"16:04","arrivaltime":"22:00","costtime":"5小时56分","trainno12306":"","distance":1318,"day":1,"isend":1,"sequenceno":1,"priceed":553,"priceyd":933,"pricesw":1748,"pricetd":"-","pricerz":"-","priceyz":"-","pricegr1":"-","pricegr2":"-","pricerw1":"-","pricerw2":"-","priceyw1":"-","priceyw2":"-","priceyw3":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"},{"trainno":"G152","type":"G","typename":"高铁","station":"上海虹桥","endstation":"北京南","departuretime":"16:18","arrivaltime":"22:12","costtime":"5小时54分","trainno12306":"","distance":1318,"day":1,"isend":1,"sequenceno":1,"priceed":553,"priceyd":933,"pricesw":1748,"pricetd":"-","pricerz":"-","priceyz":"-","pricegr1":"-","pricegr2":"-","pricerw1":"-","pricerw2":"-","priceyw1":"-","priceyw2":"-","priceyw3":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"},{"trainno":"G16","type":"G","typename":"高铁","station":"上海虹桥","endstation":"北京南","departuretime":"17:00","arrivaltime":"21:36","costtime":"4小时36分","trainno12306":"","distance":1318,"day":1,"isend":1,"sequenceno":1,"priceed":553,"priceyd":933,"pricesw":1748,"pricetd":"-","pricerz":"-","priceyz":"-","pricegr1":"-","pricegr2":"-","pricerw1":"-","pricerw2":"-","priceyw1":"-","priceyw2":"-","priceyw3":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"},{"trainno":"G154","type":"G","typename":"高铁","station":"上海虹桥","endstation":"北京南","departuretime":"17:13","arrivaltime":"22:48","costtime":"5小时35分","trainno12306":"","distance":1318,"day":1,"isend":1,"sequenceno":1,"priceed":553,"priceyd":933,"pricesw":1748,"pricetd":"-","pricerz":"-","priceyz":"-","pricegr1":"-","pricegr2":"-","pricerw1":"-","pricerw2":"-","priceyw1":"-","priceyw2":"-","priceyw3":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"},{"trainno":"G156","type":"G","typename":"高铁","station":"上海虹桥","endstation":"北京南","departuretime":"17:18","arrivaltime":"22:58","costtime":"5小时40分","trainno12306":"","distance":1318,"day":1,"isend":1,"sequenceno":1,"priceed":553,"priceyd":933,"pricesw":1748,"pricetd":"-","pricerz":"-","priceyz":"-","pricegr1":"-","pricegr2":"-","pricerw1":"-","pricerw2":"-","priceyw1":"-","priceyw2":"-","priceyw3":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"},{"trainno":"G44","type":"G","typename":"高铁","station":"上海虹桥","endstation":"北京南","departuretime":"17:23","arrivaltime":"23:08","costtime":"5小时45分","trainno12306":"","distance":1308,"day":1,"isend":1,"sequenceno":4,"priceed":553,"priceyd":933,"pricesw":1748,"pricetd":"-","pricerz":"-","priceyz":"-","pricegr1":"-","pricegr2":"-","pricerw1":"-","pricerw2":"-","priceyw1":"-","priceyw2":"-","priceyw3":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"},{"trainno":"G158","type":"G","typename":"高铁","station":"上海虹桥","endstation":"北京南","departuretime":"17:34","arrivaltime":"23:29","costtime":"5小时55分","trainno12306":"","distance":1318,"day":1,"isend":1,"sequenceno":1,"priceed":553,"priceyd":933,"pricesw":1748,"pricetd":"-","pricerz":"-","priceyz":"-","pricegr1":"-","pricegr2":"-","pricerw1":"-","pricerw2":"-","priceyw1":"-","priceyw2":"-","priceyw3":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"},{"trainno":"G18","type":"G","typename":"高铁","station":"上海","endstation":"北京南","departuretime":"17:55","arrivaltime":"22:36","costtime":"4小时41分","trainno12306":"","distance":1325,"day":1,"isend":1,"sequenceno":1,"priceed":558,"priceyd":939,"pricesw":1762.5,"pricetd":"-","pricerz":"-","priceyz":"-","pricegr1":"-","pricegr2":"-","pricerw1":"-","pricerw2":"-","priceyw1":"-","priceyw2":"-","priceyw3":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"},{"trainno":"T110","type":"T","typename":"特快","station":"上海","endstation":"北京","departuretime":"17:57","arrivaltime":"10:08","costtime":"16小时11分","trainno12306":"","distance":1463,"day":2,"isend":1,"sequenceno":1,"priceyz":177.5,"priceyw1":304.5,"pricerw1":476.5,"pricegr1":879.5,"pricesw":"-","pricetd":"-","pricerz":"-","pricegr2":"-","pricerw2":"-","priceyw2":"-","priceyw3":"-","priceyd":"-","priceed":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"},{"trainno":"G22","type":"G","typename":"高铁","station":"上海虹桥","endstation":"北京南","departuretime":"19:00","arrivaltime":"23:18","costtime":"4小时18分","trainno12306":"","distance":1318,"day":1,"isend":1,"sequenceno":1,"priceed":553,"priceyd":933,"pricesw":1748,"pricetd":"-","pricerz":"-","priceyz":"-","pricegr1":"-","pricegr2":"-","pricerw1":"-","pricerw2":"-","priceyw1":"-","priceyw2":"-","priceyw3":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"},{"trainno":"Z282","type":"Z","typename":"直达特快","station":"上海南","endstation":"北京","departuretime":"19:30","arrivaltime":"10:22","costtime":"14小时52分","trainno12306":"","distance":1460,"day":2,"isend":0,"sequenceno":4,"priceyz":177.5,"priceyw1":304.5,"pricerw1":476.5,"pricesw":"-","pricetd":"-","pricerz":"-","pricegr1":"-","pricegr2":"-","pricerw2":"-","priceyw2":"-","priceyw3":"-","priceyd":"-","priceed":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"},{"trainno":"D710","type":"D","typename":"动车","station":"上海","endstation":"北京南","departuretime":"21:24","arrivaltime":"09:22","costtime":"11小时58分","trainno12306":"","distance":1454,"day":2,"isend":1,"sequenceno":1,"priceed":292,"priceyw1":437,"pricerw1":554,"pricesw":"-","pricetd":"-","pricerz":"-","priceyz":"-","pricegr1":"-","pricegr2":"-","pricerw2":"-","priceyw2":"-","priceyw3":"-","priceyd":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"},{"trainno":"G142","type":"G","typename":"高铁","station":"上海虹桥","endstation":"北京南","departuretime":"14:10","arrivaltime":"20:18","costtime":"6小时8分","trainno12306":"","distance":1318,"day":1,"isend":1,"sequenceno":1,"priceed":553,"priceyd":933,"pricesw":1748,"pricetd":"-","pricerz":"-","priceyz":"-","pricegr1":"-","pricegr2":"-","pricerw1":"-","pricerw2":"-","priceyw1":"-","priceyw2":"-","priceyw3":"-","pricewz":"-","priceqt":"-","pricedw":"-","pricedw1":"-"}]}}
-
-
-        </pre>
-    </div>
-    <!--css div popup end-->
-
-    </td>
-    <td>无截图</td>
-</tr>
-
-<tr id='pt1.2' class='hiddenRow'>
-    <td ><div class='testcase'>test_caipiao</div></td>
-    <td colspan='5' align='center'>
-
-    <!--css div popup start-->
-    <span class='status passCase'>
-    <a class="popup_link" onfocus='this.blur();' href="javascript:showTestDetail('div_pt1.2')" >
-        通过</a></span>
-
-    <div id='div_pt1.2' class="popup_window">
-        <div style='text-align: right; color:red;cursor:pointer'>
-        <a onfocus='this.blur();' onclick="document.getElementById('div_pt1.2').style.display = 'none' " >
-           [x]</a>
-        </div>
-        <pre>
-        
-pt1.2: {"status":0,"msg":"ok","result":{"caipiaoid":13,"issueno":"2020043","number":"02 09 13 15 23 24 27","refernumber":"10","opendate":"2020-05-27","officialopendate":null,"deadline":"2020-07-26","saleamount":4808946,"totalmoney":"1118791.00","prize":[{"prizename":"一等奖","require":"中7+0","num":null,"singlebonus":null},{"prizename":"二等奖","require":"中6+1","num":6,"singlebonus":26637},{"prizename":"三等奖","require":"中6+0","num":177,"singlebonus":1805},{"prizename":"四等奖","require":"中5+1","num":448,"singlebonus":200},{"prizename":"五等奖","require":"中5+0","num":5628,"singlebonus":50},{"prizename":"六等奖","require":"中4+1","num":7752,"singlebonus":10},{"prizename":"七等奖","require":"中4+0","num":61918,"singlebonus":5},{"prizename":"特别奖","require":"按官方活动规定","num":null,"singlebonus":null}]}}
-
-
-        </pre>
-    </div>
-    <!--css div popup end-->
-
-    </td>
-    <td>无截图</td>
-</tr>
-
-<tr id='pt1.3' class='hiddenRow'>
-    <td ><div class='testcase'>test_IP</div></td>
-    <td colspan='5' align='center'>
-
-    <!--css div popup start-->
-    <span class='status passCase'>
-    <a class="popup_link" onfocus='this.blur();' href="javascript:showTestDetail('div_pt1.3')" >
-        通过</a></span>
-
-    <div id='div_pt1.3' class="popup_window">
-        <div style='text-align: right; color:red;cursor:pointer'>
-        <a onfocus='this.blur();' onclick="document.getElementById('div_pt1.3').style.display = 'none' " >
-           [x]</a>
-        </div>
-        <pre>
-        
-pt1.3: C:\Users\WSH10112\AppData\Local\Programs\Python\Python38-32\lib\site-packages\urllib3\connectionpool.py:979: InsecureRequestWarning: Unverified HTTPS request is being made to host 'api.binstd.com'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#ssl-warnings
-  warnings.warn(
-{'status': 0, 'msg': 'ok', 'result': {'ip': '192.168.40.131', 'area': '未分配或者内网IP', 'type': '对方和您在同一内部网', 'country': '中国', 'province': '未分配或者内网IP', 'city': None, 'town': None}}
-
-
-        </pre>
-    </div>
-    <!--css div popup end-->
-
-    </td>
-    <td>无截图</td>
-</tr>
-
+%(test_list)s
 <tr id='total_row'>
     <th>统计</th>
-    <th>3</th>
-    <th>3</th>
-    <th>0</th>
-    <th>0</th>
+    <th>%(count)s</th>
+    <th>%(Pass)s</th>
+    <th>%(fail)s</th>
+    <th>%(error)s</th>
     <th>&nbsp;</th>
     <th>&nbsp;</th>
 </tr>
 </table>
 <script>
     showCase(1);
-    drawCircle(3, 0, 0);
+    drawCircle(%(Pass)s, %(fail)s, %(error)s);
 </script>
+"""
+    # variables: (test_list, count, Pass, fail, error)
 
-<div id='ending'>&nbsp;</div>
+    REPORT_CLASS_TMPL = r"""
+<tr class='%(style)s'>
+    <td>%(desc)s</td>
+    <td>%(count)s</td>
+    <td>%(Pass)s</td>
+    <td>%(fail)s</td>
+    <td>%(error)s</td>
+    <td><a href="javascript:showClassDetail('%(cid)s',%(count)s)">详情</a></td>
+    <td>&nbsp;</td>
+</tr>
+"""  # variables: (style, desc, count, Pass, fail, error, cid)
 
-</body>
-</html>
+    REPORT_TEST_WITH_OUTPUT_TMPL = r"""
+<tr id='%(tid)s' class='%(Class)s'>
+    <td ><div class='testcase'>%(desc)s</div></td>
+    <td colspan='5' align='center'>
+
+    <!--css div popup start-->
+    <span class='status %(style)s'>
+    <a class="popup_link" onfocus='this.blur();' href="javascript:showTestDetail('div_%(tid)s')" >
+        %(status)s</a></span>
+
+    <div id='div_%(tid)s' class="popup_window">
+        <div style='text-align: right; color:red;cursor:pointer'>
+        <a onfocus='this.blur();' onclick="document.getElementById('div_%(tid)s').style.display = 'none' " >
+           [x]</a>
+        </div>
+        <pre>
+        %(script)s
+        </pre>
+    </div>
+    <!--css div popup end-->
+
+    </td>
+    <td>%(img)s</td>
+</tr>
+"""  # variables: (tid, Class, style, desc, status,img)
+
+    REPORT_TEST_NO_OUTPUT_TMPL = r"""
+<tr id='%(tid)s' class='%(Class)s'>
+    <td><div class='testcase'>%(desc)s</div></td>
+    <td colspan='5' align='center'><span class='status %(style)s'>%(status)s</span></td>
+    <td>%(img)s</td>
+</tr>
+"""  # variables: (tid, Class, style, desc, status,img)
+
+    REPORT_TEST_OUTPUT_TMPL = r"""
+%(id)s: %(output)s
+"""  # variables: (id, output)
+
+    IMG_TMPL = r"""
+        <a href="#"  onclick="show_img(this)">显示截图</a>
+    <div align="center" class="screenshots"  style="display:none">
+        <a class="close_shots"  href="#"   onclick="hide_img(this)"></a>
+        %(imgs)s
+        <div class="imgyuan"></div>
+    </div>
+    """
+    # ------------------------------------------------------------------------
+    # ENDING
+    #
+
+    ENDING_TMPL = """<div id='ending'>&nbsp;</div>"""
+
+    # -------------------- The end of the Template class -------------------
+
+    def __getattribute__(self, item):
+        value = object.__getattribute__(self, item)
+        if PY3K:
+            return value
+        else:
+            if isinstance(value, str):
+                return value.decode("utf-8")
+            else:
+                return value
+
+
+TestResult = unittest.TestResult
+
+
+class _TestResult(TestResult):
+    # note: _TestResult is a pure representation of results.
+    # It lacks the output and reporting ability compares to unittest._TextTestResult.
+
+    def __init__(self, verbosity=1, retry=0, save_last_try=True):
+        TestResult.__init__(self)
+        self.stdout0 = None
+        self.stderr0 = None
+        self.success_count = 0
+        self.failure_count = 0
+        self.error_count = 0
+        self.verbosity = verbosity
+
+        # result is a list of result in 4 tuple
+        # (
+        #   result code (0: success; 1: fail; 2: error),
+        #   TestCase object,
+        #   Test output (byte string),
+        #   stack trace,
+        # )
+        self.result = []
+        self.retry = retry
+        self.trys = 0
+        self.status = 0
+        self.save_last_try = save_last_try
+        self.outputBuffer = StringIO.StringIO()
+
+    def startTest(self, test):
+        test.imgs = []
+        # test.imgs = getattr(test, "imgs", [])
+        TestResult.startTest(self, test)
+        self.outputBuffer.seek(0)
+        self.outputBuffer.truncate()
+        stdout_redirector.fp = self.outputBuffer
+        stderr_redirector.fp = self.outputBuffer
+        self.stdout0 = sys.stdout
+        self.stderr0 = sys.stderr
+        sys.stdout = stdout_redirector
+        sys.stderr = stderr_redirector
+
+    def complete_output(self):
+        """
+        Disconnect output redirection and return buffer.
+        Safe to call multiple times.
+        """
+        if self.stdout0:
+            sys.stdout = self.stdout0
+            sys.stderr = self.stderr0
+            self.stdout0 = None
+            self.stderr0 = None
+        return self.outputBuffer.getvalue()
+
+    def stopTest(self, test):
+        # Usually one of addSuccess, addError or addFailure would have been called.
+        # But there are some path in unittest that would bypass this.
+        # We must disconnect stdout in stopTest(), which is guaranteed to be called.
+        if self.retry:
+            if self.status == 1:
+                self.trys += 1
+                if self.trys <= self.retry:
+                    if self.save_last_try:
+                        t = self.result.pop(-1)
+                        if t[0] == 1:
+                            self.failure_count -= 1
+                        else:
+                            self.error_count -= 1
+                    test = copy.copy(test)
+                    sys.stderr.write("Retesting... ")
+                    sys.stderr.write(str(test))
+                    sys.stderr.write('..%d \n' % self.trys)
+                    doc = test._testMethodDoc or ''
+                    if doc.find('_retry') != -1:
+                        doc = doc[:doc.find('_retry')]
+                    desc = "%s_retry:%d" % (doc, self.trys)
+                    if not PY3K:
+                        if isinstance(desc, str):
+                            desc = desc.decode("utf-8")
+                    test._testMethodDoc = desc
+                    test(self)
+                else:
+                    self.status = 0
+                    self.trys = 0
+        self.complete_output()
+
+    def addSuccess(self, test):
+        self.success_count += 1
+        self.status = 0
+        TestResult.addSuccess(self, test)
+        output = self.complete_output()
+        self.result.append((0, test, output, ''))
+        if self.verbosity > 1:
+            sys.stderr.write('ok ')
+            sys.stderr.write(str(test))
+            sys.stderr.write('\n')
+        else:
+            sys.stderr.write('.')
+
+    def addError(self, test, err):
+        self.error_count += 1
+        self.status = 1
+        TestResult.addError(self, test, err)
+        _, _exc_str = self.errors[-1]
+        output = self.complete_output()
+        self.result.append((2, test, output, _exc_str))
+        if not getattr(test, "driver", ""):
+            pass
+        else:
+            try:
+                driver = getattr(test, "driver")
+                test.imgs.append(driver.get_screenshot_as_base64())
+            except Exception:
+                pass
+        if self.verbosity > 1:
+            sys.stderr.write('E  ')
+            sys.stderr.write(str(test))
+            sys.stderr.write('\n')
+        else:
+            sys.stderr.write('E')
+
+    def addFailure(self, test, err):
+        self.failure_count += 1
+        self.status = 1
+        TestResult.addFailure(self, test, err)
+        _, _exc_str = self.failures[-1]
+        output = self.complete_output()
+        self.result.append((1, test, output, _exc_str))
+        if not getattr(test, "driver", ""):
+            pass
+        else:
+            try:
+                driver = getattr(test, "driver")
+                test.imgs.append(driver.get_screenshot_as_base64())
+            except Exception as e:
+                pass
+        if self.verbosity > 1:
+            sys.stderr.write('F  ')
+            sys.stderr.write(str(test))
+            sys.stderr.write('\n')
+        else:
+            sys.stderr.write('F')
+
+
+class HTMLTestRunner(Template_mixin):
+    def __init__(self, stream=sys.stdout, verbosity=1, title=None, description=None, retry=0, save_last_try=False):
+        self.stream = stream
+        self.retry = retry
+        self.save_last_try = save_last_try
+        self.verbosity = verbosity
+        if title is None:
+            self.title = self.DEFAULT_TITLE
+        else:
+            self.title = title
+        if description is None:
+            self.description = self.DEFAULT_DESCRIPTION
+        else:
+            self.description = description
+
+        self.startTime = datetime.datetime.now()
+
+    def run(self, test):
+        "Run the given test case or test suite."
+        result = _TestResult(self.verbosity, self.retry, self.save_last_try)
+        test(result)
+        self.stopTime = datetime.datetime.now()
+        self.generateReport(test, result)
+        if PY3K:
+            # for python3
+            # print('\nTime Elapsed: %s' % (self.stopTime - self.startTime),file=sys.stderr)
+            output = '\nTime Elapsed: %s' % (self.stopTime - self.startTime)
+            sys.stderr.write(output)
+        else:
+            print >> sys.stderr, '\nTime Elapsed: %s' % (self.stopTime - self.startTime)
+        return result
+
+    def sortResult(self, result_list):
+        # unittest does not seems to run in any particular order.
+        # Here at least we want to group them together by class.
+        rmap = {}
+        classes = []
+        for n, t, o, e in result_list:
+            cls = t.__class__
+            if not cls in rmap:
+                rmap[cls] = []
+                classes.append(cls)
+            rmap[cls].append((n, t, o, e))
+        r = [(cls, rmap[cls]) for cls in classes]
+        return r
+
+    def getReportAttributes(self, result):
+        """
+        Return report attributes as a list of (name, value).
+        Override this to add custom attributes.
+        """
+        startTime = str(self.startTime)[:19]
+        duration = str(self.stopTime - self.startTime)
+        status = []
+        tester = '汪先锦'
+        if result.success_count:
+            status.append(u'<span class="tj passCase">Pass</span>%s' % result.success_count)
+        if result.failure_count:
+            status.append(u'<span class="tj failCase">Failure</span>%s' % result.failure_count)
+        if result.error_count:
+            status.append(u'<span class="tj errorCase">Error</span>%s' % result.error_count)
+        if status:
+            status = ' '.join(status)
+        else:
+            status = 'none'
+        return [
+            (u'开始时间', startTime),
+            (u'耗时', duration),
+            (u'状态', status),
+            (u'测试报告人', tester)
+        ]
+
+    def generateReport(self, test, result):
+        report_attrs = self.getReportAttributes(result)
+        generator = 'HTMLTestRunner %s' % __version__
+        stylesheet = self._generate_stylesheet()
+        heading = self._generate_heading(report_attrs)
+        report = self._generate_report(result)
+        ending = self._generate_ending()
+        output = self.HTML_TMPL % dict(
+            title=saxutils.escape(self.title),
+            generator=generator,
+            stylesheet=stylesheet,
+            heading=heading,
+            report=report,
+            ending=ending,
+        )
+        if PY3K:
+            self.stream.write(output.encode())
+        else:
+            self.stream.write(output.encode('utf8'))
+
+    def _generate_stylesheet(self):
+        return self.STYLESHEET_TMPL
+
+    def _generate_heading(self, report_attrs):
+        a_lines = []
+        for name, value in report_attrs:
+            line = self.HEADING_ATTRIBUTE_TMPL % dict(
+                name=name,
+                value=value,
+            )
+            a_lines.append(line)
+        heading = self.HEADING_TMPL % dict(
+            title=saxutils.escape(self.title),
+            parameters=''.join(a_lines),
+            description=saxutils.escape(self.description),
+        )
+        return heading
+
+    def _generate_report(self, result):
+        rows = []
+        sortedResult = self.sortResult(result.result)
+        for cid, (cls, cls_results) in enumerate(sortedResult):
+            # subtotal for a class
+            np = nf = ne = 0
+            for n, t, o, e in cls_results:
+                if n == 0:
+                    np += 1
+                elif n == 1:
+                    nf += 1
+                else:
+                    ne += 1
+
+            # format class description
+            if cls.__module__ == "__main__":
+                name = cls.__name__
+            else:
+                name = "%s.%s" % (cls.__module__, cls.__name__)
+            doc = cls.__doc__ and cls.__doc__.split("\n")[0] or ""
+            desc = doc and '%s: %s' % (name, doc) or name
+            if not PY3K:
+                if isinstance(desc, str):
+                    desc = desc.decode("utf-8")
+
+            row = self.REPORT_CLASS_TMPL % dict(
+                style=ne > 0 and 'errorClass' or nf > 0 and 'failClass' or 'passClass',
+                desc=desc,
+                count=np + nf + ne,
+                Pass=np,
+                fail=nf,
+                error=ne,
+                cid='c%s' % (cid + 1),
+            )
+            rows.append(row)
+
+            for tid, (n, t, o, e) in enumerate(cls_results):
+                self._generate_report_test(rows, cid, tid, n, t, o, e)
+
+        report = self.REPORT_TMPL % dict(
+            test_list=u''.join(rows),
+            count=str(result.success_count + result.failure_count + result.error_count),
+            Pass=str(result.success_count),
+            fail=str(result.failure_count),
+            error=str(result.error_count),
+        )
+        return report
+
+    def _generate_report_test(self, rows, cid, tid, n, t, o, e):
+        # e.g. 'pt1.1', 'ft1.1', etc
+        has_output = bool(o or e)
+        tid = (n == 0 and 'p' or 'f') + 't%s.%s' % (cid + 1, tid + 1)
+        name = t.id().split('.')[-1]
+        if self.verbosity > 1:
+            doc = t._testMethodDoc or ''
+        else:
+            doc = ""
+
+        desc = doc and ('%s: %s' % (name, doc)) or name
+        if not PY3K:
+            if isinstance(desc, str):
+                desc = desc.decode("utf-8")
+        tmpl = has_output and self.REPORT_TEST_WITH_OUTPUT_TMPL or self.REPORT_TEST_NO_OUTPUT_TMPL
+
+        # o and e should be byte string because they are collected from stdout and stderr?
+        if isinstance(o, str):
+            # uo = unicode(o.encode('string_escape'))
+            if PY3K:
+                uo = o
+            else:
+                uo = o.decode('utf-8', 'ignore')
+        else:
+            uo = o
+        if isinstance(e, str):
+            # ue = unicode(e.encode('string_escape'))
+            if PY3K:
+                ue = e
+            elif e.find("Error") != -1 or e.find("Exception") != -1:
+                es = e.decode('utf-8', 'ignore').split('\n')
+                es[-2] = es[-2].decode('unicode_escape')
+                ue = u"\n".join(es)
+            else:
+                ue = e.decode('utf-8', 'ignore')
+        else:
+            ue = e
+
+        script = self.REPORT_TEST_OUTPUT_TMPL % dict(
+            id=tid,
+            output=saxutils.escape(uo + ue),
+        )
+        if getattr(t, 'imgs', []):
+            # 判断截图列表，如果有则追加
+            tmp = u""
+            for i, img in enumerate(t.imgs):
+                if i == 0:
+                    tmp += """ <img src="data:image/jpg;base64,%s" style="display: block;" class="img"/>\n""" % img
+                else:
+                    tmp += """ <img src="data:image/jpg;base64,%s" style="display: none;" class="img"/>\n""" % img
+            imgs = self.IMG_TMPL % dict(imgs=tmp)
+        else:
+            imgs = u"""无截图"""
+
+        row = tmpl % dict(
+            tid=tid,
+            Class=(n == 0 and 'hiddenRow' or 'none'),
+            style=n == 2 and 'errorCase' or (n == 1 and 'failCase' or 'passCase'),
+            desc=desc,
+            script=script,
+            status=self.STATUS[n],
+            img=imgs,
+        )
+        rows.append(row)
+        if not has_output:
+            return
+
+    def _generate_ending(self):
+        return self.ENDING_TMPL
+
+
+##############################################################################
+# Facilities for running tests from the command line
+##############################################################################
+
+# Note: Reuse unittest.TestProgram to launch test. In the future we may
+# build our own launcher to support more specific command line
+# parameters like test title, CSS, etc.
+class TestProgram(unittest.TestProgram):
+    """
+    A variation of the unittest.TestProgram. Please refer to the base
+    class for command line parameters.
+    """
+
+    def runTests(self):
+        # Pick HTMLTestRunner as the default test runner.
+        # base class's testRunner parameter is not useful because it means
+        # we have to instantiate HTMLTestRunner before we know self.verbosity.
+        if self.testRunner is None:
+            self.testRunner = HTMLTestRunner(verbosity=self.verbosity)
+        unittest.TestProgram.runTests(self)
+
+
+main = TestProgram
+
+##############################################################################
+# Executing this module from the command line
+##############################################################################
+
+if __name__ == "__main__":
+    main(module=None)

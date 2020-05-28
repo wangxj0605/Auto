@@ -1,10 +1,9 @@
 import unittest
-from interfaceTest import HTMLTestRunnerNew
+from interfaceTest import HTMLTestRunner_cn
 import os  # 系统方法
 from interfaceTest import my_unittest as ut
+import logging
 
-ABSPATH = os.path.realpath(os.path.dirname(__file__))
-print(ABSPATH)
 
 if __name__ == '__main__':
     suit = unittest.TestSuite()
@@ -12,7 +11,7 @@ if __name__ == '__main__':
     suit.addTest(ut.MyTestCase("test_caipiao"))
     suit.addTest(ut.MyTestCase("test_IP"))
     # suit.addTest(ut.MyTestCase("test_login"))
-    path = 'E:/workSpace/Auto/Report/'
+    path = 'D:\\softdate\\Workspac\\Auto\\Report\\'
     # if not os.path.exists(path):
     #     os.makedirs(path)
     # else:
@@ -21,6 +20,6 @@ if __name__ == '__main__':
     report_title = u'自动化测试报告'
     desc = u'自动化测试报告详情'
     fp = open(report_path, 'wb')
-    runner = HTMLTestRunnerNew.HTMLTestRunner(fp, title=report_title, description=desc)
+    runner = HTMLTestRunner_cn.HTMLTestRunner(fp, title=report_title, description=desc)
     runner.run(suit)
-    print("================测试结束,已经生成测试报告!=====================")
+    logging.info('测试用例执行结束,报告已生成!')

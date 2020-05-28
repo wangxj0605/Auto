@@ -10,8 +10,8 @@ import logging
 
 # set up logging to file - see previous section for more details
 logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
-                    datefmt='%m-%d %H:%M',
+                    format='%(asctime)s %(name)s %(levelname)s %(message)s',
+                    datefmt='%Y-%m-%d %H:%M:%S',
                     filename='D:\softdate\Workspac\Auto\log\myapp.log',
                     filemode='w')
 # define a Handler which writes INFO messages or higher to the sys.stderr
