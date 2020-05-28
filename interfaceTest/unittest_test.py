@@ -12,7 +12,7 @@ if __name__ == '__main__':
     suit.addTest(ut.MyTestCase("test_caipiao"))
     suit.addTest(ut.MyTestCase("test_IP"))
     # suit.addTest(ut.MyTestCase("test_login"))
-    path = 'D:/softdate/Workspac/Auto/Report/'
+    path = 'E:/workSpace/Auto/Report/'
     # if not os.path.exists(path):
     #     os.makedirs(path)
     # else:
